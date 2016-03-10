@@ -17,6 +17,7 @@
 # along with this program in a file in the toplevel directory called
 # "AGPLv3".  If not, see <http://www.gnu.org/licenses/>.
 #
+from functools import wraps
 from textwrap import dedent
 from django.template.defaultfilters import floatformat
 from mock import Mock, patch
@@ -52,6 +53,33 @@ class MockSubmissionsAPI(object):
         if key in self.submissions:
             return [self.submissions[key]]
         return []
+
+
+def check_dashboard_and_report(fixture, set_mentoring_values=True):
+    """
+    Decorator for dashboard test methods.
+
+    - Sets up the given fixture
+    - Runs the decorated test
+    - Clicks the download link
+    - Opens the report
+    - Runs the decorated test again against the report
+    """
+    def wrapper(test):
+        @wraps(test)
+        def wrapped(test_case):
+            test_case._install_fixture(fixture)
+            if set_mentoring_values:
+                test_case._set_mentoring_values()
+            test_case.go_to_view('student_view')
+            test(test_case)
+            download_link = test_case.browser.find_element_by_css_selector('.report-download-link')
+            download_link.click()
+            test_case.browser.get(download_link.get_attribute('href'))
+            test_case.assertRegexpMatches(test_case.browser.current_url, r'^data:text/html;base64,')
+            test(test_case)
+        return wrapped
+    return wrapper
 
 
 class TestDashboardBlock(SeleniumXBlockTest):
@@ -132,12 +160,23 @@ class TestDashboardBlock(SeleniumXBlockTest):
     def _format_sr_text(self, visible_text):
         return "Score: {value}".format(value=visible_text)
 
+    def _set_mentoring_values(self):
+        pbs = self.browser.find_elements_by_css_selector('.mentoring')
+        for pb in pbs:
+            mcqs = pb.find_elements_by_css_selector('fieldset.choices')
+            for idx, mcq in enumerate(mcqs):
+                choices = mcq.find_elements_by_css_selector('.choices .choice label')
+                choices[idx].click()
+            submit = pb.find_element_by_css_selector('.submit input.input-main')
+            submit.click()
+            self.wait_until_disabled(submit)
+
+    @check_dashboard_and_report(SIMPLE_DASHBOARD, set_mentoring_values=False)
     def test_empty_dashboard(self):
         """
         Test that when the student has not submitted any question answers, we still see
         the dashboard, and its lists all the MCQ questions in the way we expect.
         """
-        self._install_fixture(self.SIMPLE_DASHBOARD)
         dashboard = self.browser.find_element_by_css_selector('.pb-dashboard')
         step_headers = dashboard.find_elements_by_css_selector('thead')
         self.assertEqual(len(step_headers), 3)
@@ -152,26 +191,11 @@ class TestDashboardBlock(SeleniumXBlockTest):
                 cell = mcq.find_element_by_css_selector('td:last-child')
                 self._assert_cell_contents(cell, '', 'No value yet')
 
-    def _set_mentoring_values(self):
-        pbs = self.browser.find_elements_by_css_selector('.mentoring')
-        for pb in pbs:
-            mcqs = pb.find_elements_by_css_selector('fieldset.choices')
-            for idx, mcq in enumerate(mcqs):
-                choices = mcq.find_elements_by_css_selector('.choices .choice label')
-                choices[idx].click()
-            submit = pb.find_element_by_css_selector('.submit input.input-main')
-            submit.click()
-            self.wait_until_disabled(submit)
-
+    @check_dashboard_and_report(SIMPLE_DASHBOARD)
     def test_dashboard(self):
         """
         Submit an answer to each MCQ, then check that the dashboard reflects those answers.
         """
-        self._install_fixture(self.SIMPLE_DASHBOARD)
-        self._set_mentoring_values()
-
-        # Reload the page:
-        self.go_to_view("student_view")
         dashboard = self.browser.find_element_by_css_selector('.pb-dashboard')
         headers = dashboard.find_elements_by_class_name('report-header')
         self.assertEqual(len(headers), 0)
@@ -197,6 +221,7 @@ class TestDashboardBlock(SeleniumXBlockTest):
             expected_average = {0: "2", 1: "3", 2: "1"}[step_num]
             self._assert_cell_contents(right_col, expected_average, self._format_sr_text(expected_average))
 
+    @check_dashboard_and_report(ALTERNATIVE_DASHBOARD)
     def test_dashboard_alternative(self):
         """
         Submit an answer to each MCQ, then check that the dashboard reflects those answers with alternative
@@ -206,11 +231,6 @@ class TestDashboardBlock(SeleniumXBlockTest):
         * Numerical values are not shown
         * Include HTML header and footer snippets
         """
-        self._install_fixture(self.ALTERNATIVE_DASHBOARD)
-        self._set_mentoring_values()
-
-        # Reload the page:
-        self.go_to_view("student_view")
         dashboard = self.browser.find_element_by_css_selector('.pb-dashboard')
         header_p = dashboard.find_element_by_id('header-paragraph')
         self.assertEquals(header_p.text, 'Header')
@@ -239,17 +259,13 @@ class TestDashboardBlock(SeleniumXBlockTest):
             self.assertEqual(left_col.text, average_labels[step_num])
             right_col = avg_row.find_element_by_css_selector('.value')
             expected_average = {0: "2", 1: "3", 2: "1"}[step_num]
-            self._assert_cell_contents(right_col, '',  self._format_sr_text(expected_average))
+            self._assert_cell_contents(right_col, '', self._format_sr_text(expected_average))
 
+    @check_dashboard_and_report(HIDE_QUESTIONS_DASHBOARD)
     def test_dashboard_exclude_questions(self):
         """
         Submit an answer to each MCQ, then check that the dashboard ignores questions it is configured to ignore
         """
-        self._install_fixture(self.HIDE_QUESTIONS_DASHBOARD)
-        self._set_mentoring_values()
-
-        # Reload the page:
-        self.go_to_view("student_view")
         dashboard = self.browser.find_element_by_css_selector('.pb-dashboard')
         steps = dashboard.find_elements_by_css_selector('tbody')
         self.assertEqual(len(steps), 3)
@@ -273,15 +289,11 @@ class TestDashboardBlock(SeleniumXBlockTest):
             expected_average = {0: "1", 1: "3", 2: "1"}[step_num]
             self._assert_cell_contents(right_col, expected_average, self._format_sr_text(expected_average))
 
+    @check_dashboard_and_report(MALFORMED_HIDE_QUESTIONS_DASHBOARD)
     def test_dashboard_malformed_exclude_questions(self):
         """
         Submit an answer to each MCQ, then check that the dashboard ignores questions it is configured to ignore
         """
-        self._install_fixture(self.MALFORMED_HIDE_QUESTIONS_DASHBOARD)
-        self._set_mentoring_values()
-
-        # Reload the page:
-        self.go_to_view("student_view")
         dashboard = self.browser.find_element_by_css_selector('.pb-dashboard')
         steps = dashboard.find_elements_by_css_selector('tbody')
         self.assertEqual(len(steps), 3)
