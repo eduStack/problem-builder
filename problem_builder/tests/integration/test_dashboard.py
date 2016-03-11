@@ -17,6 +17,7 @@
 # along with this program in a file in the toplevel directory called
 # "AGPLv3".  If not, see <http://www.gnu.org/licenses/>.
 #
+import json
 from functools import wraps
 from textwrap import dedent
 from django.template.defaultfilters import floatformat
@@ -55,7 +56,7 @@ class MockSubmissionsAPI(object):
         return []
 
 
-def check_dashboard_and_report(fixture, set_mentoring_values=True):
+def check_dashboard_and_report(fixture, image=None, set_mentoring_values=True):
     """
     Decorator for dashboard test methods.
 
@@ -69,6 +70,10 @@ def check_dashboard_and_report(fixture, set_mentoring_values=True):
         @wraps(test)
         def wrapped(test_case):
             test_case._install_fixture(fixture)
+            if image:
+                dashboard = test_case.vertical.runtime.get_block('test-scenario.pb-dashboard.d0.u0')
+                dashboard.visual_rules = json.dumps({'images': [image]})
+                dashboard.save()
             if set_mentoring_values:
                 test_case._set_mentoring_values()
             test_case.go_to_view('student_view')
@@ -104,6 +109,9 @@ class TestDashboardBlock(SeleniumXBlockTest):
       exclude_questions='{"Step 1": "1234", "Step 2":[3], "Step 3":[2]}'
     />
     """)
+
+    # Clean up screenshots if the tests pass
+    cleanup_on_success = True
 
     def setUp(self):
         super(TestDashboardBlock, self).setUp()
@@ -220,6 +228,24 @@ class TestDashboardBlock(SeleniumXBlockTest):
             right_col = avg_row.find_element_by_css_selector('.value')
             expected_average = {0: "2", 1: "3", 2: "1"}[step_num]
             self._assert_cell_contents(right_col, expected_average, self._format_sr_text(expected_average))
+
+    @check_dashboard_and_report(SIMPLE_DASHBOARD, image='/static/test/swoop-bg.png')
+    def test_dashboard_image(self):
+        """
+        Test that the dashboard image is displayed correctly, both on the page
+        and it the report. We allow minor differences here as the report
+        screenshot is not a perfect match.
+        """
+        self.assertScreenshot('image', 'dashboard-image', threshold=3000)
+
+    @check_dashboard_and_report(SIMPLE_DASHBOARD, image='//courses.edx.org/c4x/HarvardX/GSE3x/asset/swoop-bg.png')
+    def test_dashboard_image_cross_domain(self):
+        """
+        Test that cross-domain dashboard images are displayed correctly. We
+        allow minor differences here as the report screenshot is not a perfect
+        match.
+        """
+        self.assertScreenshot('image', 'dashboard-image', threshold=3000)
 
     @check_dashboard_and_report(ALTERNATIVE_DASHBOARD)
     def test_dashboard_alternative(self):
